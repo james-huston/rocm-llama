@@ -1,0 +1,80 @@
+# rocm-llama — docker compose orchestration
+#
+# Before first run:
+#   1. Verify your render/video group IDs and set them in .env if different:
+#        $ getent group render video
+#        render:x:104:
+#        video:x:39:hustonjs
+#      If yours differ from 104/39, copy .env.example to .env and override.
+#
+#   2. Create your config/llama-swap.yaml from the example:
+#        $ cp config/llama-swap.example.yaml config/llama-swap.yaml
+#        $ ./scripts/find-gguf-blobs.sh    # map ollama models to blob paths
+#        Then edit config/llama-swap.yaml with the actual paths.
+#
+#   3. Build and start:
+#        $ docker compose up -d --build
+#
+# Usage:
+#        $ curl http://localhost:11434/v1/models
+#        $ curl http://localhost:11434/v1/chat/completions \
+#            -H "Content-Type: application/json" \
+#            -d '{"model":"qwen3-coder-30b","messages":[{"role":"user","content":"hi"}]}'
+
+services:
+  llama-swap:
+    build:
+      context: .
+      # Pin ROCm version / GPU target at build time:
+      # args:
+      #   ROCM_IMAGE_TAG: "7.2.1-complete"
+      #   LLAMA_CPP_REF: "master"
+      #   GPU_TARGETS: "gfx1100"          # RX 7900 XTX
+      #   SD_GPU_TARGETS: "gfx1100"
+    image: rocm-llama:latest
+    container_name: rocm-llama
+    restart: unless-stopped
+
+    ports:
+      - "11434:11434"
+
+    # AMD GPU passthrough — /dev/kfd is required for ROCm, /dev/dri for DRM.
+    devices:
+      - /dev/kfd
+      - /dev/dri
+
+    # Supplementary groups so the container user can access /dev/kfd and /dev/dri.
+    # Defaults assume Fedora-style GIDs (render=104, video=39). If yours differ,
+    # set RENDER_GID / VIDEO_GID in .env — see docker-compose.yml header comment.
+    group_add:
+      - "${RENDER_GID:-104}"
+      - "${VIDEO_GID:-39}"
+
+    # ROCm requires shared IPC and ptrace access inside the container.
+    ipc: host
+    security_opt:
+      - seccomp=unconfined
+
+    volumes:
+      # Your llama-swap config directory. We bind the *directory* (not the
+      # single file) so that --watch-config picks up edits.
+      - ./config:/config:ro
+
+      # Your GGUF models. Default: reuse Ollama's blob store.
+      # Override with MODELS_DIR env in .env if your GGUFs live elsewhere.
+      - ${MODELS_DIR:-/opt/apps/ollama-models}:/models:ro
+
+      # Tool-aware Jinja chat templates for models whose embedded GGUF
+      # template lacks tool-calling branches. Referenced from
+      # config/llama-swap.yaml via --chat-template-file.
+      - ./templates:/templates:ro
+
+    # Larger shared memory for bigger contexts / batch sizes
+    shm_size: "8gb"
+
+    # Polite logging — llama-swap and llama-server are chatty
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

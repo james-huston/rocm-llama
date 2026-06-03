@@ -1,0 +1,130 @@
+# rocm-llama models manifest
+#
+# This file is the **source of truth** for what we run and where each GGUF came from.
+# `make models-apply` reads this file, downloads missing GGUFs, and regenerates
+# config/llama-swap.yaml.
+#
+# Each entry:
+#   name:        OpenAI model id (alias — what clients use)
+#   enabled:     true | false  (false = candidate, not installed/served)
+#   engine:      llama-server | sd-server
+#   path:        Ollama blob path on the host (preferred — no download needed)
+#   repo:        Hugging Face repo id (e.g. "unsloth/GLM-4.7-Flash-GGUF")
+#   file:        HF filename (may be a glob/split set)
+#   url:         Direct download URL (alternative to repo/file)
+#   ctx:         Context size (-c)
+#   template:    Jinja template file in templates/ (--chat-template-file)
+#   reasoning:   true/false — use --reasoning-format deepseek
+#   temp:        Temperature (default 0.6)
+#   top_p:       Top-p (default 0.95)
+#   max_tokens:  Max output tokens (default 1024)
+#   ngf:         GPU layers (-ngl, default 99 for ROCm)
+#   device:      ROCm device flag (default --device HIP0)
+#   extra:       Extra llama-server flags
+#   civitai:     Civitai model version id (alternative to repo/file)
+#   civitai_file: Civitai file to download (default: primary)
+#
+# LiteLLM metadata (optional):
+#   litellm:
+#     description: "..."
+#     supports_function_calling: true
+#     supports_tool_choice: true
+#     supports_reasoning: true
+#     supports_vision: true
+#   decode_tps:  Measured decode tokens/second (used to derive costs)
+#   cost:        Per-token cost override (falls back to cost: block below)
+#
+# Top-level cost block: prices GPU time as electricity × amortization.
+#   cost:
+#     watts: 300
+#     usd_per_kwh: 0.18
+#     amortization: 3
+#     input_factor: 4
+
+cost:
+  watts: 300
+  usd_per_kwh: 0.18
+  amortization: 3
+  input_factor: 4
+
+models:
+  # --- Code models ---
+  - name: qwen3-coder-30b
+    enabled: true
+    engine: llama-server
+    path: /models/qwen3-coder-30b-AWQ.gguf
+    ctx: 131072
+    template: qwen3-coder.jinja
+    temp: 0.6
+    top_p: 0.95
+    decode_tps: 28
+    litellm:
+      description: "Qwen3 Coder 30B — code generation, strong tool use"
+      supports_function_calling: true
+      supports_tool_choice: true
+
+  - name: glm-4.7-flash-q4
+    enabled: true
+    engine: llama-server
+    repo: unsloth/GLM-4.7-Flash-GGUF
+    file: GLM-4.7-Flash-Q4_K_XL.gguf
+    name_hint: glm-4.7-flash
+    ctx: 131072
+    template: glm-4.7-flash.jinja
+    reasoning: true
+    temp: 0.6
+    top_p: 0.95
+    decode_tps: 35
+    litellm:
+      description: "GLM-4.7 Flash — reasoning model with long context"
+      supports_reasoning: true
+
+  # --- General purpose ---
+  - name: qwen3-14b
+    enabled: true
+    engine: llama-server
+    path: /models/qwen3-14b-Q4_K_M.gguf
+    ctx: 131072
+    template: qwen3.jinja
+    temp: 0.6
+    top_p: 0.95
+    decode_tps: 42
+    litellm:
+      description: "Qwen3 14B — balanced general purpose model"
+      supports_function_calling: true
+
+  - name: llama3.1-8b
+    enabled: false
+    engine: llama-server
+    path: /models/llama3.1-8b-Q4_K_M.gguf
+    ctx: 8192
+    template: llama3.1.jinja
+    temp: 0.6
+    top_p: 0.95
+    litellm:
+      description: "Llama 3.1 8B — fast general purpose model"
+      supports_function_calling: true
+
+  # --- Large models (when VRAM allows) ---
+  - name: qwen3-32b
+    enabled: false
+    engine: llama-server
+    path: /models/qwen3-32b-Q4_K_M.gguf
+    ctx: 131072
+    template: qwen3.jinja
+    temp: 0.6
+    top_p: 0.95
+    decode_tps: 18
+    litellm:
+      description: "Qwen3 32B — high-capability general purpose"
+
+  # --- Image generation ---
+  - name: sdxl
+    enabled: true
+    engine: sd-server
+    repo: stabilityai/stable-diffusion-xl-base-1.0
+    file: sd_xl_base_1.0.safetensors
+    ctx: 768
+    temp: 0.8
+    max_tokens: 0
+    extra: "--dim 1024"

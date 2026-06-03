@@ -1,0 +1,19 @@
+# Generated serving config — produced from models.yaml by `make models-apply`.
+# models.yaml is the tracked source of truth; this artifact is not committed.
+config/llama-swap.yaml
+config/llama-swap.yaml.bak
+
+# Local environment overrides for GIDs / paths
+.env
+
+# Python bytecode cache (the helper scripts are Python)
+__pycache__/
+*.pyc
+
+# Editor / OS cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
