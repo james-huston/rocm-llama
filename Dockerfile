@@ -25,6 +25,19 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# The ROCm dev image ships its HIP-aware clang at /opt/rocm/llvm/bin but does
+# NOT put it on PATH, so the build steps below that ask for clang/clang++ would
+# otherwise fail to configure. Put ROCm's LLVM toolchain on PATH (this is the
+# correct compiler for the HIP backend; plain apt clang would not be).
+ENV PATH="/opt/rocm/llvm/bin:${PATH}"
+
+# llama.cpp/sd.cpp link against ROCm clang's OpenMP runtime (libomp.so), which
+# lives in ROCm's LLVM lib dir — NOT the default /opt/rocm/lib that ldconfig
+# already knows about. Without this the binaries fail at runtime with
+# "libomp.so: cannot open shared object file" (exit 127). Register the path so
+# the dynamic loader finds it.
+RUN echo "/opt/rocm/llvm/lib" > /etc/ld.so.conf.d/rocm-llvm.conf && ldconfig
+
 # -----------------------------------------------------------------------------
 # Build llama.cpp with HIP/ROCm backend
 #
@@ -37,18 +50,28 @@ RUN apt-get update && \
 #
 # -DGGML_HIP=ON              enables the HIP/ROCm backend
 # -DGGML_HIP_ROCWMMA_FATTN=ON enables flash attention on RDNA3+/CDNA (requires rocWMMA)
-# -DGGML_BACKEND_DL=ON       enables dynamic backend loading (works across GPUs)
+#
+# Native static build: GGML_NATIVE (default ON) tunes the single CPU backend for
+# the build host. We deliberately do NOT use GGML_BACKEND_DL — it would force
+# GGML_CPU_ALL_VARIANTS (compiling ~15 x86 microarch variants incl. the very slow
+# AMX/AVX-512 ones this host can't even use), ballooning build time for no benefit
+# on a single-arch, single-host image. The image is already pinned to one
+# GPU_TARGETS, so dynamic backend loading buys nothing here.
 # -----------------------------------------------------------------------------
 ARG LLAMA_CPP_REF=master
 ARG GPU_TARGETS=gfx1100
+# rocWMMA flash-attention needs WMMA matrix instructions that exist only on
+# RDNA3+/CDNA. RDNA2 (gfx103x — e.g. RX 6650 XT) lacks them, so building with
+# this ON for an RDNA2 target fails to compile the FA kernels. Pass OFF for
+# RDNA2: docker compose build --build-arg GGML_HIP_ROCWMMA_FATTN=OFF
+ARG GGML_HIP_ROCWMMA_FATTN=ON
 RUN git clone --depth 1 --branch ${LLAMA_CPP_REF} \
         https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp && \
     cd /tmp/llama.cpp && \
     cmake -B build -G Ninja \
         -DGGML_HIP=ON \
         -DGPU_TARGETS=${GPU_TARGETS} \
-        -DGGML_HIP_ROCWMMA_FATTN=ON \
-        -DGGML_BACKEND_DL=ON \
+        -DGGML_HIP_ROCWMMA_FATTN=${GGML_HIP_ROCWMMA_FATTN} \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_BUILD_TYPE=Release && \
