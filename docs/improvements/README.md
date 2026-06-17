@@ -40,6 +40,10 @@ Planned and in-progress improvements for rocm-llama.
 
 ## Benchmark automation
 
+> Current results are recorded manually in [`../benchmarks.md`](../benchmarks.md)
+> (RX 6650 XT, with an Arc Pro B70 cross-stack comparison). This section tracks
+> automating their collection.
+
 - [ ] Run `make test-models` with timing and report TPS
 - [ ] Store benchmark results in models.yaml for cost derivation
 - [ ] Compare performance across ROCm versions
