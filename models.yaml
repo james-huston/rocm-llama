@@ -12,15 +12,15 @@
 #   repo:        Hugging Face repo id (e.g. "unsloth/GLM-4.7-Flash-GGUF")
 #   file:        HF filename (may be a glob/split set)
 #   url:         Direct download URL (alternative to repo/file)
-#   ctx:         Context size (-c)
+#   ctx:         Context size (-c, default 8192)
 #   template:    Jinja template file in templates/ (--chat-template-file)
 #   reasoning:   true/false — use --reasoning-format deepseek
-#   temp:        Temperature (default 0.6)
-#   top_p:       Top-p (default 0.95)
-#   max_tokens:  Max output tokens (default 1024)
+#   temp:        Temperature — emitted only if set (else the GGUF default)
+#   top_p:       Top-p — emitted only if set (else the GGUF default)
 #   ngf:         GPU layers (-ngl, default 99 for ROCm)
-#   device:      ROCm device flag (default --device HIP0)
-#   extra:       Extra llama-server flags
+#   device:      ROCm device (-> --device); omitted by default (single GPU via
+#                HIP_VISIBLE_DEVICES). sm: -> -sm, also omitted by default.
+#   extra:       Extra llama-server flags (e.g. "-fa on --top-k 64")
 #   civitai:     Civitai model version id (alternative to repo/file)
 #   civitai_file: Civitai file to download (default: primary)
 #
@@ -47,6 +47,11 @@
 # without the two syncs deleting each other's models.
 stack: rocm
 
+# llama-swap config-header values emitted by `make models-apply`. Tuned for the
+# 8 GB RX 6650 XT host (model loads can be slow at the VRAM edge).
+healthCheckTimeout: 240
+startPort: 12800
+
 cost:
   watts: 300
   usd_per_kwh: 0.18
@@ -54,9 +59,15 @@ cost:
   input_factor: 4
 
 models:
+  # ===========================================================================
+  # EXAMPLES for larger AMD cards (RX 7900 XTX 20–24 GB etc.) — kept as templates
+  # but enabled: false, because their GGUFs aren't present on THIS 8 GB 6650 XT
+  # host and most won't fit. The actually-served set on this host is the small /
+  # MoE block at the bottom. Re-enable an example only on a card with the VRAM.
+  # ===========================================================================
   # --- Code models ---
   - name: qwen3-coder-30b
-    enabled: true
+    enabled: false
     engine: llama-server
     path: /models/qwen3-coder-30b-AWQ.gguf
     ctx: 131072
@@ -70,7 +81,7 @@ models:
       supports_tool_choice: true
 
   - name: glm-4.7-flash-q4
-    enabled: true
+    enabled: false
     engine: llama-server
     repo: unsloth/GLM-4.7-Flash-GGUF
     file: GLM-4.7-Flash-Q4_K_XL.gguf
@@ -87,7 +98,7 @@ models:
 
   # --- General purpose ---
   - name: qwen3-14b
-    enabled: true
+    enabled: false
     engine: llama-server
     path: /models/qwen3-14b-Q4_K_M.gguf
     ctx: 131072
@@ -126,7 +137,7 @@ models:
 
   # --- Image generation ---
   - name: sdxl
-    enabled: true
+    enabled: false
     engine: sd-server
     repo: stabilityai/stable-diffusion-xl-base-1.0
     file: sd_xl_base_1.0.safetensors
@@ -142,12 +153,9 @@ models:
   # figure (see docs/benchmarks.md); paired with cost.watts:300 it prices these
   # higher per token than the B70, which is correct (slower + drawier).
   #
-  # NOTE: on this host the live config/llama-swap.yaml is currently hand-
-  # maintained (it diverged from the generic template entries above), so these
-  # are served from that file, not regenerated via `make models-apply`. The
-  # entries here are the tracked source for LiteLLM metadata (descriptions,
-  # decode_tps -> cost) and provenance. Reconciling the whole manifest to the
-  # live config is a separate follow-up.
+  # These five are the actual served set on this host: `make models-apply`
+  # regenerates config/llama-swap.yaml from exactly these entries (single GPU via
+  # HIP_VISIBLE_DEVICES, so no --device/-sm flags are emitted).
   # ===========================================================================
 
   - name: ministral-3-8b-rocm
@@ -196,6 +204,7 @@ models:
     engine: llama-server
     path: /models/llama3.1-8b/Q4_K_M.gguf
     ctx: 16384
+    template: llama3.1.jinja
     temp: 0.6
     top_p: 0.95
     decode_tps: 47

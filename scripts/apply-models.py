@@ -26,6 +26,12 @@ except ImportError:
     print("ERROR: PyYAML is required. Install with: pip install pyyaml", file=sys.stderr)
     sys.exit(1)
 
+SCHEMA = ("# yaml-language-server: $schema="
+          "https://raw.githubusercontent.com/mostlygeek/llama-swap/refs/heads/main/config-schema.json")
+DEFAULT_HEALTHCHECK = 240
+DEFAULT_START_PORT = 12800
+DEFAULT_TTL = 600
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="Apply models.yaml manifest")
@@ -232,89 +238,104 @@ def apply_model(entry, models_dir, templates_dir, dry_run=False):
         return None
 
 
-def generate_config(entries, templates_dir, dry_run=False):
-    """Generate llama-swap config from model entries."""
-    servers = {}
+def generate_block(entry, templates_dir):
+    """Render one enabled entry as a llama-swap model block (the real config
+    format: `<name>:` -> `cmd: |` -> the llama-server/sd-server argv -> `ttl:`)."""
+    name = entry.get("name", "unnamed")
+    engine = entry.get("engine", "llama-server")
+    path = entry.get("path", "")
+    if path and not path.startswith("/"):
+        path = f"/models/{path}"
 
-    for entry in entries:
-        name = entry.get("name", "unnamed")
-        enabled = entry.get("enabled", False)
-        if not enabled:
-            continue
+    lines = [f"  # {name} — from models.yaml", f"  {name}:", "    cmd: |"]
 
-        engine = entry.get("engine", "llama-server")
-        path = entry.get("path", "")
-        if not path.startswith("/"):
-            path = f"/models/{path}"
+    if engine == "sd-server":
+        lines += [
+            "      /opt/sd-cpp/bin/sd-server",
+            f"      --model {path}",
+            "      --listen-ip 127.0.0.1",
+            "      --listen-port ${PORT}",
+        ]
+        if entry.get("dim"):
+            lines.append(f"      --dim {entry['dim']}")
+        if entry.get("extra"):
+            lines.append(f"      {entry['extra']}")
+        # sd-server has no /health; point llama-swap's probe at one it answers.
+        lines.append("    checkEndpoint: /v1/models")
+    else:
+        lines += [
+            "      /opt/llama-cpp/bin/llama-server",
+            "      --port ${PORT}",
+            f"      --model {path}",
+            f"      --alias {name}",
+            "      --host 127.0.0.1",
+            f"      -ngl {entry.get('ngf', 99)}",
+            f"      -c {entry.get('ctx', 8192)}",
+        ]
+        # Device / split-mode are omitted by default: this image picks the GPU via
+        # HIP_VISIBLE_DEVICES, so a single device needs no --device/-sm. Set
+        # `device:`/`sm:` in models.yaml only for explicit multi-GPU placement.
+        if entry.get("device"):
+            lines.append(f"      --device {entry['device']}")
+        if entry.get("sm"):
+            lines.append(f"      -sm {entry['sm']}")
+        lines.append("      --jinja")
+        template = entry.get("template")
+        if template:
+            if not os.path.exists(os.path.join(templates_dir, template)):
+                print(f"  WARNING: template not found: templates/{template} (referenced by {name})")
+            lines.append(f"      --chat-template-file /templates/{template}")
+        if entry.get("reasoning_format"):
+            lines.append(f"      --reasoning-format {entry['reasoning_format']}")
+        elif entry.get("reasoning"):
+            lines.append("      --reasoning-format deepseek")
+        # Only emit samplers explicitly set in the manifest — no silent defaults,
+        # so a model with no temp/top_p uses the GGUF's own defaults.
+        if entry.get("temp") is not None:
+            lines.append(f"      --temp {entry['temp']}")
+        if entry.get("top_p") is not None:
+            lines.append(f"      --top-p {entry['top_p']}")
+        if entry.get("extra"):
+            lines.append(f"      {entry['extra']}")
 
-        config = {"model": path}
-
-        if engine == "llama-server":
-            ctx = entry.get("ctx", 8192)
-            template = entry.get("template")
-            temp = entry.get("temp", 0.6)
-            top_p = entry.get("top_p", 0.95)
-            max_tokens = entry.get("max_tokens", 1024)
-            ngf = entry.get("ngf", 99)
-            device = entry.get("device", "HIP0")
-            reasoning = entry.get("reasoning", False)
-            extra = entry.get("extra", "")
-            jinja = entry.get("jinja", False)
-
-            if ctx:
-                config["ctx"] = ctx
-            if template:
-                tmpl_path = os.path.join(templates_dir, template)
-                if os.path.exists(tmpl_path):
-                    config["chat_template_file"] = f"/templates/{template}"
-                else:
-                    print(f"  WARNING: template not found: {tmpl_path}")
-            if temp:
-                config["temp"] = temp
-            if top_p:
-                config["top_p"] = top_p
-            if max_tokens:
-                config["max_tokens"] = max_tokens
-            config["ngf"] = ngf
-            config["device"] = device
-            if jinja:
-                config["jinja"] = True
-            if reasoning:
-                config["reasoning_format"] = "deepseek"
-            if extra:
-                config["extra"] = extra
-
-        elif engine == "sd-server":
-            temp = entry.get("temp", 0.8)
-            max_tokens = entry.get("max_tokens", 0)
-            dim = entry.get("dim", 1024)
-            extra = entry.get("extra", "")
-
-            config["engine"] = "sd-server"
-            if temp:
-                config["temp"] = temp
-            if max_tokens:
-                config["max_tokens"] = max_tokens
-            if dim:
-                config["dim"] = dim
-            if extra:
-                config["extra"] = extra
-
-        servers[name] = config
-
-    return {"llama-servers": servers}
+    lines.append(f"    ttl: {entry.get('ttl', DEFAULT_TTL)}")
+    return "\n".join(lines)
 
 
-def find_orphaned_dirs(models_dir, config):
+def generate_config(manifest, templates_dir):
+    """Build the full llama-swap config text from the manifest's enabled entries."""
+    health = manifest.get("healthCheckTimeout", DEFAULT_HEALTHCHECK)
+    start = manifest.get("startPort", DEFAULT_START_PORT)
+    head = [
+        SCHEMA,
+        "#",
+        "# GENERATED by scripts/apply-models.py from models.yaml — DO NOT EDIT BY HAND.",
+        "# Edit models.yaml and run `make models-apply`.",
+        "",
+        f"healthCheckTimeout: {health}",
+        f"startPort: {start}",
+        "",
+        "models:",
+        "",
+    ]
+    blocks = [generate_block(e, templates_dir)
+              for e in manifest.get("models", []) if e.get("enabled", False)]
+    return "\n".join(head) + "\n\n".join(blocks) + "\n"
+
+
+def find_orphaned_dirs(models_dir, models):
     """Find directories in MODELS_DIR not referenced by any enabled model."""
-    servers = config.get("llama-servers", {})
     referenced = set()
-    for name, cfg in servers.items():
-        model_path = cfg.get("model", "")
-        # Extract the basename/dir from the path
-        if model_path.startswith("/models/"):
-            rel = model_path[len("/models/"):]
-            referenced.add(os.path.dirname(rel))
+    for entry in models:
+        if not entry.get("enabled", False):
+            continue
+        path = entry.get("path", "")
+        if path.startswith("/models/"):
+            referenced.add(os.path.dirname(path[len("/models/"):]).split("/", 1)[0])
+        elif entry.get("dir"):
+            referenced.add(entry["dir"])
+        elif entry.get("name"):
+            referenced.add(entry["name"])
 
     if not os.path.isdir(models_dir):
         return []
@@ -322,6 +343,8 @@ def find_orphaned_dirs(models_dir, config):
     orphaned = []
     for entry in os.listdir(models_dir):
         full = os.path.join(models_dir, entry)
+        if entry in ("blobs", "manifests", "hub", "xet"):
+            continue
         if os.path.isdir(full) and entry not in referenced:
             orphaned.append(entry)
 
@@ -350,13 +373,13 @@ def main():
             continue
         apply_model(entry, args.models_dir, templates_dir, args.dry_run)
 
-    # Generate config
+    # Generate config (real llama-swap format: models -> cmd block -> ttl)
     print()
-    config = generate_config(models, templates_dir, args.dry_run)
+    config = generate_config(manifest, templates_dir)
 
     if args.dry_run:
         print("--- DRY RUN: generated config ---")
-        print(yaml.dump(config, default_flow_style=False, sort_keys=False))
+        print(config)
         print("--- end dry run ---")
     else:
         # Backup existing config
@@ -366,11 +389,11 @@ def main():
 
         os.makedirs(os.path.dirname(args.config), exist_ok=True)
         with open(args.config, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            f.write(config)
         print(f"Wrote {args.config}")
 
     # Check for orphaned model dirs
-    orphaned = find_orphaned_dirs(args.models_dir, config)
+    orphaned = find_orphaned_dirs(args.models_dir, models)
     if orphaned:
         print()
         print(f"Orphaned directories in {args.models_dir} (not referenced by any enabled model):")
