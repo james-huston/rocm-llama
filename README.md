@@ -36,11 +36,30 @@ Built and tested for:
 - **AMD Radeon RX 7900 XTX** (RDNA3, 20 GB) ✓
 - **AMD Radeon RX 7800 XT / 7700 XT** (RDNA3, 16 GB) ✓
 - **AMD Radeon RX 6700 XT / 6800 / 6900 XT** (RDNA2, 10–16 GB) ✓ (may need `HSA_OVERRIDE_GFX_VERSION`)
+- **AMD Radeon RX 6650 XT** (RDNA2, gfx1032 → run as gfx1030, 8 GB) ✓ benchmarked — see [Benchmarks](#benchmarks) (set `HSA_OVERRIDE_GFX_VERSION=10.3.0`)
 - **AMD Instinct MI300X** (CDNA3, 192 GB) ✓
 
 GPUs other than AMD Radeon/Instinct won't benefit from this setup. For NVIDIA,
 use llama.cpp's CUDA builds; for Intel, use the SYCL backend (see
 [battlemage-llama](https://github.com/james-huston/battlemage-llama)).
+
+## Benchmarks
+
+Measured on an **8 GB Radeon RX 6650 XT** (RDNA2/gfx1030), `llama-bench`,
+full GPU offload, flash-attention on. `pp512` = prefill, `tg128` = decode (t/s):
+
+| Model | Arch | Quant | Prefill | Decode |
+|-------|------|-------|---------|--------|
+| **LFM2-8B-A1B** | MoE 8.3 B / 1.5 B active | Q5_K_M | 2508 | **157.0** |
+| Gemma 4 E4B (it) | dense / E4B effective | Q6_K | 1069 | 50.4 |
+| Ministral 3 8B (2512) | dense 8.5 B | Q4_K_M | 697 | 44.7 |
+| llama3.1-8b *(reference)* | dense 8 B | Q4_K_M | ~226 | ~47 |
+
+On 8 GB, a small **MoE** (LFM2-8B-A1B) decodes ~3.5× faster than a dense 8B at
+the same VRAM, because decode rides only ~1.5 B active params. It also closes
+most of the gap to the 4×-pricier Arc Pro B70 (1.14× decode lead, vs 1.76× on
+dense). Full numbers, cross-stack comparison, and the MoE analysis:
+**[docs/benchmarks.md](docs/benchmarks.md)**.
 
 ## Prerequisites
 
@@ -309,6 +328,7 @@ verification).
 
 ## Documentation
 
+- [`docs/benchmarks.md`](docs/benchmarks.md) — measured throughput + cross-stack (ROCm vs SYCL) comparison
 - [`docs/host-setup.md`](docs/host-setup.md) — host ROCm / kernel setup for AMD GPUs
 - [`docs/upgrading.md`](docs/upgrading.md) — bump llama.cpp / llama-swap / ROCm version
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common issues and diagnostics

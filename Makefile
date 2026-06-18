@@ -40,9 +40,13 @@ LITELLM_MASTER_KEY ?=
 LITELLM ?=
 LITELLM_URL ?= http://localhost:4000
 UPSTREAM ?=
-UPSTREAM_URL ?= http://localhost:11434
+UPSTREAM_URL ?= http://localhost:11435
 API_BASE ?=
-MODEL_API_BASE ?= http://localhost:11434/v1
+MODEL_API_BASE ?= http://localhost:11435/v1
+# Ownership tag so a shared LiteLLM proxy can host several stacks without their
+# syncs deleting each other's models. Defaults to the top-level `stack:` in
+# models.yaml when unset; override with `make sync-litellm STACK=rocm`.
+STACK ?=
 NO_DELETE ?=
 RESET ?=
 
@@ -160,6 +164,7 @@ sync-litellm: ## Mirror llama-swap models into a LiteLLM proxy
 		--upstream "$(UPSTREAM_URL)" \
 		--litellm "$(LITELLM_URL)" \
 		$(if $(API_BASE),--api-base "$(API_BASE)") \
+		$(if $(STACK),--stack "$(STACK)") \
 		$(if $(NO_DELETE),--no-delete) \
 		$(if $(RESET),--reset) \
 		$(if $(DRY_RUN),--dry-run)

@@ -25,18 +25,26 @@ services:
   llama-swap:
     build:
       context: .
-      # Pin ROCm version / GPU target at build time:
-      # args:
-      #   ROCM_IMAGE_TAG: "7.2.1-complete"
-      #   LLAMA_CPP_REF: "master"
-      #   GPU_TARGETS: "gfx1100"          # RX 7900 XTX
-      #   SD_GPU_TARGETS: "gfx1100"
+      # Pin ROCm version / GPU target at build time. This host: RX 6650 XT
+      # (gfx1032, RDNA2) — compile for gfx1030 and disable rocWMMA flash-attn,
+      # which RDNA2 can't compile (no WMMA instructions).
+      args:
+        GPU_TARGETS: "gfx1030"
+        SD_GPU_TARGETS: "gfx1030"
+        GGML_HIP_ROCWMMA_FATTN: "OFF"
     image: rocm-llama:latest
     container_name: rocm-llama
     restart: unless-stopped
 
+    # Host 11435 (not 11434) so this coexists with the battlemage SYCL stack,
+    # which already serves llama-swap on 11434. Container port stays 11434.
     ports:
-      - "11434:11434"
+      - "11435:11434"
+
+    # Runtime GPU selection / arch override (see .env).
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "${HSA_OVERRIDE_GFX_VERSION:-}"
+      HIP_VISIBLE_DEVICES: "${HIP_VISIBLE_DEVICES:-0}"
 
     # AMD GPU passthrough — /dev/kfd is required for ROCm, /dev/dri for DRM.
     devices:
